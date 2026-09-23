@@ -31,6 +31,10 @@ export enum ErrorCode {
   DEPENDENCY_UNAVAILABLE = 'DEPENDENCY_UNAVAILABLE',
   WRITE_REJECTED = 'WRITE_REJECTED',
 
+  // Key management / custody (fail-closed)
+  KEY_DECRYPT_FAILED = 'KEY_DECRYPT_FAILED',
+  KEY_VERSION_UNSUPPORTED = 'KEY_VERSION_UNSUPPORTED',
+
   // Validation
   VALIDATION_FAILED = 'VALIDATION_FAILED',
 }
@@ -104,6 +108,8 @@ const DEFAULT_STATUS_BY_CODE: Record<ErrorCode, number> = {
   [ErrorCode.IDEMPOTENCY_CONFLICT]: 409,
   [ErrorCode.DEPENDENCY_UNAVAILABLE]: 503,
   [ErrorCode.WRITE_REJECTED]: 503,
+  [ErrorCode.KEY_DECRYPT_FAILED]: 503,
+  [ErrorCode.KEY_VERSION_UNSUPPORTED]: 503,
   [ErrorCode.VALIDATION_FAILED]: 422,
 };
 
@@ -125,6 +131,8 @@ const GENERIC_MESSAGE_BY_CODE: Record<ErrorCode, string> = {
   [ErrorCode.IDEMPOTENCY_CONFLICT]: 'Idempotency key reused with a different payload.',
   [ErrorCode.DEPENDENCY_UNAVAILABLE]: 'A required dependency is unavailable.',
   [ErrorCode.WRITE_REJECTED]: 'Write rejected to protect data integrity.',
+  [ErrorCode.KEY_DECRYPT_FAILED]: 'Key material could not be decrypted; operation refused.',
+  [ErrorCode.KEY_VERSION_UNSUPPORTED]: 'Key version is not supported; operation refused.',
   [ErrorCode.VALIDATION_FAILED]: 'Validation failed.',
 };
 
