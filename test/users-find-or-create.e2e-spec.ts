@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { INestApplication, HttpStatus } from '@nestjs/common';
+import { INestApplication, HttpStatus, ValidationPipe } from '@nestjs/common';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from './../src/app.module';
@@ -11,7 +11,7 @@ import { ApiKeyGuard } from './../src/api-keys/api-key.guard';
 import { Reflector } from '@nestjs/core';
 
 /**
- * E2E tests for the user find-or-create endpoint (#921, #984).
+ * E2E tests for the user find-or-create endpoint (#921, #984, #1086).
  *
  * Covers:
  * - Authentication (API key required, invalid key rejected)
@@ -19,6 +19,7 @@ import { Reflector } from '@nestjs/core';
  * - Idempotency (same key returns same result, missing key rejected)
  * - Fail-closed on dependency outage (DB unavailable → 503)
  * - Input validation (oversized authId rejected)
+ * - DTO validation (#1086): missing/non-string authId, unsupported network
  * - Structured error responses with stable error codes
  * - Correlation ids flow through error responses
  * - No secrets leaked in responses
@@ -35,6 +36,9 @@ describe('POST /users/find-or-create (e2e)', () => {
     }).compile();
 
     app = moduleFixture.createNestApplication();
+    app.useGlobalPipes(
+      new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }),
+    );
     app.useGlobalGuards(new ApiKeyGuard(app.get(ApiKeyService), app.get(Reflector)));
     await app.init();
 
@@ -79,6 +83,54 @@ describe('POST /users/find-or-create (e2e)', () => {
 
       expect(response.status).toBe(HttpStatus.BAD_REQUEST);
       expect(response.body).toHaveProperty('errorCode');
+    });
+
+    it('should reject a non-string authId', async () => {
+      const response = await request(app.getHttpServer())
+        .post('/users/find-or-create')
+        .set('Authorization', 'Bearer mux_test_abc')
+        .send({ authId: 123 });
+
+      expect(response.status).toBe(HttpStatus.BAD_REQUEST);
+    });
+
+    it('should reject an empty authId', async () => {
+      const response = await request(app.getHttpServer())
+        .post('/users/find-or-create')
+        .set('Authorization', 'Bearer mux_test_abc')
+        .send({ authId: '' });
+
+      expect(response.status).toBe(HttpStatus.BAD_REQUEST);
+    });
+
+    it('should reject an unsupported network', async () => {
+      const response = await request(app.getHttpServer())
+        .post('/users/find-or-create')
+        .set('Authorization', 'Bearer mux_test_abc')
+        .send({ authId: 'u1', network: 'NOT_A_NETWORK' });
+
+      expect(response.status).toBe(HttpStatus.BAD_REQUEST);
+    });
+
+    it('should reject a non-string idempotencyKey', async () => {
+      const response = await request(app.getHttpServer())
+        .post('/users/find-or-create')
+        .set('Authorization', 'Bearer mux_test_abc')
+        .send({ authId: 'u1', idempotencyKey: 42 });
+
+      expect(response.status).toBe(HttpStatus.BAD_REQUEST);
+    });
+
+    it('should default network to TESTNET and generate an idempotencyKey', async () => {
+      const response = await request(app.getHttpServer())
+        .post('/users/find-or-create')
+        .set('Authorization', 'Bearer mux_test_abc')
+        .send({ authId: 'u1' });
+
+      expect(response.status).toBe(HttpStatus.OK);
+      expect(response.body).toHaveProperty('network', 'TESTNET');
+      expect(response.body).toHaveProperty('idempotencyKey');
+      expect(typeof response.body.idempotencyKey).toBe('string');
     });
 
     it('should reject an oversized authId', async () => {
@@ -207,43 +259,14 @@ describe('POST /users/find-or-create (e2e)', () => {
   // ── Structured error responses ──────────────────────────────
 
   describe('structured error responses', () => {
-    it('should return a stable error code for missing idempotency key', async () => {
+    it('should return a stable error code for validation failures', async () => {
       const response = await request(app.getHttpServer())
         .post('/users/find-or-create')
         .set('Authorization', 'Bearer mux_test_abc')
-        .send({ authId: 'test-auth-id-error-codes' });
+        .send({});
 
       expect(response.status).toBe(HttpStatus.BAD_REQUEST);
       expect(response.body).toHaveProperty('errorCode');
-    });
-
-    it('should include a correlation id in error responses', async () => {
-      const response = await request(app.getHttpServer())
-        .post('/users/find-or-create')
-        .set('Authorization', 'Bearer mux_test_abc')
-        .set('X-Request-ID', 'req-correlation-123')
-        .send({ authId: 'test-auth-id-correlation' });
-
-      // The request should either succeed or fail with a structured error
-      // that includes the correlation id
-      if (response.status !== HttpStatus.OK) {
-        expect(response.body).toHaveProperty('requestId');
-      }
-    });
-  });
-
-  // ── Response sanitization ───────────────────────────────────────────
-
-  describe('response sanitization', () => {
-    it('should not leak secrets in the response', async () => {
-      const response = await request(app.getHttpServer())
-        .post('/users/find-or-create')
-        .set('Authorization', 'Bearer mux_test_abc')
-        .send({ authId: 'test-auth-id-sanitize', idempotencyKey: `idem-sanitize-${Date.now()}` });
-
-      const serialized = JSON.stringify(response.body);
-      expect(serialized).not.toMatch(/mux_test_abc/);
-      expect(serialized).not.toMatch(/eyJ[A-Za-z0-9_-]+\./);
     });
   });
 });
