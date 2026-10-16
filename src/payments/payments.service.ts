@@ -28,6 +28,8 @@ const ALLOWED_TRANSITIONS: Record<string, PaymentStatus[]> = {
  *  - findAll() / findOne() always filter by developerOwnerId → no cross-developer leakage.
  *  - update() re-checks ownership before mutating; 404 is returned even if the record
  *    exists but belongs to a different developer (avoid enumeration).
+ *  - update() validates every status mutation against ALLOWED_TRANSITIONS so terminal
+ *    states (CONFIRMED, FAILED) are genuinely immutable.
  *  - Idempotency key uniqueness is enforced at the DB level; the service returns the
  *    cached response instead of re-executing on conflict.
  *  - Feature-flagged: if PAYMENT_ISOLATION_ENABLED !== 'true' the guard is bypassed
@@ -47,6 +49,23 @@ export class PaymentsService {
     private readonly limitsService: LimitsService,
     private readonly walletsService: WalletsService,
   ) {}
+
+  /**
+   * Validates a `current → next` status pair against ALLOWED_TRANSITIONS.
+   * Terminal states (CONFIRMED, FAILED) have no outgoing transitions, so any
+   * attempt to move out of them is rejected here.
+   */
+  private assertTransitionAllowed(
+    current: PaymentStatus,
+    next: PaymentStatus,
+  ): void {
+    const allowed = ALLOWED_TRANSITIONS[current] ?? [];
+    if (!allowed.includes(next)) {
+      throw new BadRequestException(
+        `Cannot transition payment from ${current} to ${next}`,
+      );
+    }
+  }
 
   async create(createPaymentDto: CreatePaymentDto) {
     const {
@@ -189,13 +208,13 @@ export class PaymentsService {
       );
     }
 
+    // State machine: validate the transition after the ownership re-check so
+    // cross-developer updates still surface the non-enumerating 404/403 above.
     if (updatePaymentDto.status !== undefined) {
-      const allowed = ALLOWED_TRANSITIONS[payment.status] ?? [];
-      if (!allowed.includes(updatePaymentDto.status)) {
-        throw new BadRequestException(
-          `Cannot transition payment from ${payment.status} to ${updatePaymentDto.status}`,
-        );
-      }
+      this.assertTransitionAllowed(
+        payment.status as PaymentStatus,
+        updatePaymentDto.status,
+      );
     }
 
     return this.prisma.payment.update({
